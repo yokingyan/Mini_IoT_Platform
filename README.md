@@ -1,0 +1,2 @@
+# Mini_IoT_Platform
+包含OTA升级的轻量化的简易物联网更新嵌入式代码框架
