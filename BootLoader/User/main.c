@@ -9,14 +9,7 @@
 #include "SPI.h"
 #include "Flash.h"
 #include "BootLoader.h"
-
-
-/* OTA Info 结构体 */
-OTA_InfoTypeDef OTA_InfoStructure;
-/* OTA Update 结构体 */
-OTA_UpdateTypedef OTA_UpdateStructure;
-/* OTA Status 状态值 */
-uint32_t OTA_BootSTAFlag;
+#include "OTA.h"
 
 
 int main(void)
@@ -41,27 +34,27 @@ int main(void)
             if (U1_CB.RxDataOut == U1_CB.RxDataEnd) U1_CB.RxDataOut = &U1_CB.RxDataPtr[0];
         }
         
-         if (OTA_BootSTAFlag & IAP_XMODEM_START)
+         if (OTA_GetBootFlagStatus() & IAP_XMODEM_START)
          {
-             if (OTA_UpdateStructure.XmodemTimer >= 100)
+             if (OTA_GetXmodemTimer() >= 100)
              {
                  Serial_Printf("C");
-                 OTA_UpdateStructure.XmodemTimer = 0;
+                 OTA_XmodemSetTimer(0);
              }
-             OTA_UpdateStructure.XmodemTimer++;
+             OTA_XmodemTimerAdd();
          }
         
-        if (OTA_BootSTAFlag & OTA_UPDATE)
+        if (OTA_GetBootFlagStatus() & OTA_UPDATE)
         {
             // 更新 A 区
-            Serial_Printf("长度%d字节\r\n", OTA_InfoStructure.FileLen[OTA_UpdateStructure.W25Q64_BlockID]);
-            if (OTA_InfoStructure.FileLen[OTA_UpdateStructure.W25Q64_BlockID] % 4 == 0)
+            Serial_Printf("长度%d字节\r\n", OTA_GetOTAFilexSize(OTA_GetW25Q64BlockID()));
+            if (OTA_GetOTAFilexSize(OTA_GetW25Q64BlockID()) % 4 == 0)
             {
                 Flash_ErasePage(SPAGE_A, PAGE_A_NUM);
-                for (i = 0; i < OTA_InfoStructure.FileLen[OTA_UpdateStructure.W25Q64_BlockID] / PAGE_SIZE; i++)
+                for (i = 0; i < OTA_GetOTAFilexSize(OTA_GetW25Q64BlockID()) / PAGE_SIZE; i++)
                 {
-                    W25Q64_ReadData(i * 1024 + OTA_UpdateStructure.W25Q64_BlockID * 64 * 1024, OTA_UpdateStructure.Updatabuff, PAGE_SIZE);
-                    Flash_ProgramWord(FLASH_SADDR_A + i * PAGE_SIZE, (uint32_t *)OTA_UpdateStructure.Updatabuff, PAGE_SIZE);
+                    W25Q64_ReadData(i * 1024 + OTA_GetW25Q64BlockID() * 64 * 1024, OTA_GetUpdateBuff(0), PAGE_SIZE);
+                    Flash_ProgramWord(FLASH_SADDR_A + i * PAGE_SIZE, (uint32_t *)OTA_GetUpdateBuff(0), PAGE_SIZE);
                     
                     uint8_t temp[16*4];
                     W25Q64_ReadData(0x10000, temp, sizeof(temp));
@@ -69,20 +62,20 @@ int main(void)
                     for(int k=0;k<16;k++)
                     {
                         uint32_t val = *(uint32_t*)(temp + k*4);
-                        Serial_Printf("BlackID:%d W25Q 0x%08X : 0x%08X\r\n", OTA_UpdateStructure.W25Q64_BlockID, 0x10000 + k*4, val);
+                        Serial_Printf("BlackID:%d W25Q 0x%08X : 0x%08X\r\n", OTA_GetW25Q64BlockID(), 0x10000 + k*4, val);
                     }
                 }
-                if (OTA_InfoStructure.FileLen[OTA_UpdateStructure.W25Q64_BlockID] % 1024 != 0)
+                if (OTA_GetOTAFilexSize(OTA_GetW25Q64BlockID()) % 1024 != 0)
                 {
-                    W25Q64_ReadData(i * 1024 + OTA_UpdateStructure.W25Q64_BlockID * 64 * 1024,
-                                        OTA_UpdateStructure.Updatabuff, 
-                                        OTA_InfoStructure.FileLen[OTA_UpdateStructure.W25Q64_BlockID] % 1024);
-                    Flash_ProgramWord(FLASH_SADDR_A + i * PAGE_SIZE, (uint32_t *)OTA_UpdateStructure.Updatabuff, 
-                                        OTA_InfoStructure.FileLen[OTA_UpdateStructure.W25Q64_BlockID] % 1024);
+                    W25Q64_ReadData(i * 1024 + OTA_GetW25Q64BlockID() * 64 * 1024,
+                                        OTA_GetUpdateBuff(0), 
+                                        OTA_GetOTAFilexSize(OTA_GetW25Q64BlockID()) % 1024);
+                    Flash_ProgramWord(FLASH_SADDR_A + i * PAGE_SIZE, (uint32_t *)OTA_GetUpdateBuff(0), 
+                                        OTA_GetOTAFilexSize(OTA_GetW25Q64BlockID()) % 1024);
                 }
-                if (OTA_UpdateStructure.W25Q64_BlockID == 0)
+                if (OTA_GetW25Q64BlockID() == 0)
                 {
-                    OTA_InfoStructure.OTA_Flag = 0;
+                    OTA_SetBootFlag(0);
                     AT24C02_WriteOTA();
                 }
                 Serial_Printf("A区更新完毕\r\n");
@@ -92,7 +85,7 @@ int main(void)
             else
             {
                 Serial_Printf("长度错误\r\n");
-                OTA_BootSTAFlag &= ~OTA_UPDATE;
+                OTA_ClearBootFlag(OTA_UPDATE);
             }
         }
     }

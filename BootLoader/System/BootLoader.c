@@ -6,6 +6,7 @@
 #include "String.h"
 #include "AT24C02.h"
 #include "W25Q64.h"
+#include "OTA.h"
 
 
 Load_a Load_A;// 声明一个函数指针变量 Load_A
@@ -15,11 +16,11 @@ void BootLoader_Branch(void)
 {
     if (!BootLoader_Enter(50))
     {
-        if (OTA_InfoStructure.OTA_Flag == OTA_UPDATE_FLAG)      // OTA更新事件
+        if (OTA_GetOTAFlag() == OTA_UPDATE_FLAG)      // OTA更新事件
         {
             Serial_Printf("OTA更新\r\n");
-            OTA_BootSTAFlag |= OTA_UPDATE;
-            OTA_UpdateStructure.W25Q64_BlockID = 0;
+            OTA_SetBootFlag(OTA_UPDATE);
+            OTA_SetW25Q64BlockID(0);
         }
         else
         {
@@ -94,7 +95,7 @@ void BootLoader_Event(uint8_t *Data, uint16_t Len)
 {
     uint8_t i;
     int Temp;
-    if (OTA_BootSTAFlag == 0)
+    if (OTA_GetBootFlagStatus() == 0)
     {
         if ((Len == 1) && (Data[0] == '1'))
         {
@@ -105,32 +106,31 @@ void BootLoader_Event(uint8_t *Data, uint16_t Len)
         {
             Serial_Printf("串口IAP下载A区程序（bin）\r\n");
             Flash_ErasePage(SPAGE_A, PAGE_A_NUM);
-            OTA_BootSTAFlag |= (IAP_XMODEM_START | IAP_XMODEM_DATA);
-            OTA_UpdateStructure.XmodemTimer = 0;
-            OTA_UpdateStructure.XmodemRecvID = 0;
+            OTA_SetBootFlag(IAP_XMODEM_START | IAP_XMODEM_DATA);
+            OTA_XmodemSetTimer(0);
+            OTA_XmodemSetRecvID(0);
         }
         else if ((Len == 1) && (Data[0] == '3'))
         {
             Serial_Printf("设置版本号\r\n");
-            OTA_BootSTAFlag |= OTA_SET_VERSION;
+            OTA_SetBootFlag(OTA_SET_VERSION);
         }
         else if ((Len == 1) && (Data[0] == '4'))
         {
             Serial_Printf("查询版本号\r\n");
             AT24C02_ReadOTA();
-            Serial_Printf("当前版本号:%s\r\n", OTA_InfoStructure.OTA_Version);
+            Serial_Printf("当前版本号:%s\r\n", OTA_GetOTAVersion());
             BootLoader_Menu();
         }
         else if ((Len == 1) && (Data[0] == '5'))
         {
             Serial_Printf("外部Flash下载程序 [1-9] \r\n");
-            OTA_BootSTAFlag |= UPDATE_FLASH;
+            OTA_SetBootFlag(UPDATE_FLASH);
         }
         else if ((Len == 1) && (Data[0] == '6'))
         {
             Serial_Printf("运行Flash程序 [1-9] \r\n");
-            OTA_BootSTAFlag |= EXECUTE_FLASH;
-            
+            OTA_SetBootFlag(EXECUTE_FLASH);            
         }
         else if ((Len == 1) && (Data[0] == '7'))
         {
@@ -139,32 +139,32 @@ void BootLoader_Event(uint8_t *Data, uint16_t Len)
             NVIC_SystemReset();
         }
     }
-    else if (OTA_BootSTAFlag & IAP_XMODEM_DATA)
+    else if (OTA_GetBootFlagStatus() & IAP_XMODEM_DATA)
     {
         if ((Len == 133) && (Data[0] == 0x01))   // 属于Xmodem数据包
         {
-            OTA_BootSTAFlag &= ~IAP_XMODEM_START;
-            OTA_UpdateStructure.XmodemCRC = Xmdoem_CRC16(&Data[3], 128);
-            if (OTA_UpdateStructure.XmodemCRC == (Data[131] << 8) + Data[132])
+            OTA_ClearBootFlag(IAP_XMODEM_START);
+            OTA_XmodemSetCRC(Xmdoem_CRC16(&Data[3], 128));
+            if (OTA_XmodemGetCRC() == (Data[131] << 8) + Data[132])
             {
-                memcpy(&OTA_UpdateStructure.Updatabuff[(OTA_UpdateStructure.XmodemRecvID % (PAGE_SIZE / 128)) * 128], &Data[3], 128);
-                ++OTA_UpdateStructure.XmodemRecvID;
-                if ((OTA_UpdateStructure.XmodemRecvID % (PAGE_SIZE / 128)) == 0)
+                OTA_SetUpdateBuff((OTA_GetXmodemRecvID() % (PAGE_SIZE / 128)) * 128, &Data[3], 128);
+                OTA_XmodemRecvIDAdd();
+                if ((OTA_GetXmodemRecvID() % (PAGE_SIZE / 128)) == 0)
                 {
                     // 外部Flash  BUG
-                    if (OTA_BootSTAFlag & DOWNLOAD_FLASH)
+                    if (OTA_GetBootFlagStatus() & DOWNLOAD_FLASH)
                     {
-                        uint32_t blk_id = OTA_UpdateStructure.W25Q64_BlockID;
-                        uint32_t chunk_idx = (OTA_UpdateStructure.XmodemRecvID / (PAGE_SIZE / 128)) - 1;
+                        uint32_t blk_id = OTA_GetW25Q64BlockID();
+                        uint32_t chunk_idx = (OTA_GetXmodemRecvID() / (PAGE_SIZE / 128)) - 1;
                         for (i = 0; i < 4; ++i) 
                         {
                             uint32_t curr_page = blk_id * 256 + chunk_idx * 4 + i;
-                            W25Q64_PageProgram(&OTA_UpdateStructure.Updatabuff[i * 256], curr_page);
+                            W25Q64_PageProgram(OTA_GetUpdateBuff(i * 256), curr_page);
                             
                         }
                     }
                     // 内部Flash
-                    else Flash_ProgramWord(FLASH_SADDR_A + ((OTA_UpdateStructure.XmodemRecvID / (PAGE_SIZE / 128)) - 1) * PAGE_SIZE, (uint32_t *)OTA_UpdateStructure.Updatabuff, PAGE_SIZE);
+                    else Flash_ProgramWord(FLASH_SADDR_A + ((OTA_GetXmodemRecvID() / (PAGE_SIZE / 128)) - 1) * PAGE_SIZE, (uint32_t *)OTA_GetUpdateBuff(0), PAGE_SIZE);
                 }
                 Serial_Printf("\x06");
             }
@@ -173,27 +173,27 @@ void BootLoader_Event(uint8_t *Data, uint16_t Len)
          if ((Len == 1) && (Data[0] == 0x04))
          {
              Serial_Printf("\x06");
-             if ((OTA_UpdateStructure.XmodemRecvID % (PAGE_SIZE / 128)) != 0)
+             if ((OTA_GetXmodemRecvID() % (PAGE_SIZE / 128)) != 0)
             {
                 // 外部Flash  BUG 
-                if (OTA_BootSTAFlag & DOWNLOAD_FLASH)
+                if (OTA_GetBootFlagStatus() & DOWNLOAD_FLASH)
                 {
-                    uint32_t blk_id = OTA_UpdateStructure.W25Q64_BlockID;
-                    uint32_t chunk_idx = (OTA_UpdateStructure.XmodemRecvID / 8);
+                    uint32_t blk_id = OTA_GetW25Q64BlockID();
+                    uint32_t chunk_idx = (OTA_GetXmodemRecvID() / 8);
                     uint32_t start_page = blk_id * 256 + chunk_idx * 4;
-                    uint32_t remain_packet_cnt = OTA_UpdateStructure.XmodemRecvID % 8;
+                    uint32_t remain_packet_cnt = OTA_GetXmodemRecvID() % 8;
                     for (i = 0; i < 4; ++i) 
                         if(i*256 < remain_packet_cnt *128)
-                            W25Q64_PageProgram(&OTA_UpdateStructure.Updatabuff[i *  256], start_page + i);
+                            W25Q64_PageProgram(OTA_GetUpdateBuff(i * 256), start_page + i);
                 }
                 else 
-                    Flash_ProgramWord(FLASH_SADDR_A + (OTA_UpdateStructure.XmodemRecvID / (PAGE_SIZE / 128)) * PAGE_SIZE, (uint32_t *)OTA_UpdateStructure.Updatabuff, (OTA_UpdateStructure.XmodemRecvID % (PAGE_SIZE / 128)) * 128);
+                    Flash_ProgramWord(FLASH_SADDR_A + (OTA_GetXmodemRecvID() / (PAGE_SIZE / 128)) * PAGE_SIZE, (uint32_t *)OTA_GetUpdateBuff(0), (OTA_GetXmodemRecvID() % (PAGE_SIZE / 128)) * 128);
             }
-            OTA_BootSTAFlag &= ~IAP_XMODEM_DATA;
-            if (OTA_BootSTAFlag & DOWNLOAD_FLASH)
+            OTA_ClearBootFlag(IAP_XMODEM_DATA);
+            if (OTA_GetBootFlagStatus() & DOWNLOAD_FLASH)
             {
-                OTA_BootSTAFlag &= ~DOWNLOAD_FLASH;
-                OTA_InfoStructure.FileLen[OTA_UpdateStructure.W25Q64_BlockID] = OTA_UpdateStructure.XmodemRecvID * 128;
+                OTA_ClearBootFlag(DOWNLOAD_FLASH);
+                OTA_SetOTAFilexSize(OTA_GetW25Q64BlockID(), OTA_GetXmodemRecvID() * 128);
                 AT24C02_WriteOTA();
                 Delay_ms(100);
                 BootLoader_Menu();
@@ -205,50 +205,49 @@ void BootLoader_Event(uint8_t *Data, uint16_t Len)
             }
          }
     }
-    else if (OTA_BootSTAFlag & OTA_SET_VERSION)
+    else if (OTA_GetBootFlagStatus() & OTA_SET_VERSION)
     {
-        if (Len == 26)
+        if (Len == OTA_VERSION_LEN)
         {
             if (sscanf((char *)Data, "Ver-%d.%d.%d-%d/%d/%d-%d:%d", &Temp, &Temp, &Temp, &Temp, &Temp, &Temp, &Temp, &Temp) == 8)
             {
-                memset(OTA_InfoStructure.OTA_Version, 0, 32);
-                memcpy(OTA_InfoStructure.OTA_Version, Data, 26);
+                OTA_SetOTAVersion((char *)Data);
                 // 保存置 24c02
                 AT24C02_WriteOTA();
                 Serial_Printf("版本号更新成功\r\n");
-                OTA_BootSTAFlag &= ~OTA_SET_VERSION;
+                OTA_ClearBootFlag(OTA_SET_VERSION);
                 BootLoader_Menu();
             } else Serial_Printf("版本号格式错误!!!\r\n");
         } 
         else Serial_Printf("版本号长度错误!!!\r\n");
     }
-    else if (OTA_BootSTAFlag & UPDATE_FLASH)
+    else if (OTA_GetBootFlagStatus() & UPDATE_FLASH)
     {
         if ( Len == 1 )
         {
             if ((Data[0] >= '1') && (Data[0] <= '9'))
             {
-                OTA_UpdateStructure.W25Q64_BlockID = (Data[0] - '0');
-                OTA_BootSTAFlag |= (IAP_XMODEM_START | IAP_XMODEM_DATA | DOWNLOAD_FLASH);
-                OTA_UpdateStructure.XmodemTimer = 0;
-                OTA_UpdateStructure.XmodemRecvID = 0;
-                OTA_InfoStructure.FileLen[OTA_UpdateStructure.W25Q64_BlockID] = 0;
-                W25Q64_Block64KErase(OTA_UpdateStructure.W25Q64_BlockID);
-                Serial_Printf("串口IAP下载A区程序到外部Flash %d 块（bin）\r\n", OTA_UpdateStructure.W25Q64_BlockID);
-                OTA_BootSTAFlag &= ~UPDATE_FLASH;
+                OTA_SetW25Q64BlockID(Data[0] - '0');
+                OTA_SetBootFlag(IAP_XMODEM_START | IAP_XMODEM_DATA | DOWNLOAD_FLASH);
+                OTA_XmodemSetTimer(0);
+                OTA_XmodemSetRecvID(0);
+                OTA_SetOTAFilexSize(OTA_GetW25Q64BlockID(), 0);
+                W25Q64_Block64KErase(OTA_GetW25Q64BlockID());
+                Serial_Printf("串口IAP下载A区程序到外部Flash %d 块（bin）\r\n", OTA_GetW25Q64BlockID());
+                OTA_ClearBootFlag(UPDATE_FLASH);
             }
             else Serial_Printf("数据格式错误!!!\r\n");
         } else Serial_Printf("数据格式错误!!!\r\n");
     }
-    else if (OTA_BootSTAFlag & EXECUTE_FLASH)
+    else if (OTA_GetBootFlagStatus() & EXECUTE_FLASH)
     {
         if ( Len == 1 )
         {
             if ((Data[0] >= '1') && (Data[0] <= '9'))
             {
-                OTA_UpdateStructure.W25Q64_BlockID = (Data[0] - '0');
-                OTA_BootSTAFlag |= OTA_UPDATE;
-                OTA_BootSTAFlag &= ~EXECUTE_FLASH;
+                OTA_SetW25Q64BlockID(Data[0] - '0');
+                OTA_SetBootFlag(OTA_UPDATE);
+                OTA_ClearBootFlag(EXECUTE_FLASH);
             } 
             else Serial_Printf("数据格式错误!!!\r\n");
         } else Serial_Printf("数据格式错误!!!\r\n");

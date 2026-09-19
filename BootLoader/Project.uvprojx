@@ -684,6 +684,16 @@
               <FileType>5</FileType>
               <FilePath>.\System\BootLoader.h</FilePath>
             </File>
+            <File>
+              <FileName>OTA.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\System\OTA.h</FilePath>
+            </File>
+            <File>
+              <FileName>OTA.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\System\OTA.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
